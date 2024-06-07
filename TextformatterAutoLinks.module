@@ -7,13 +7,15 @@
  * http://processwire.com
  * License: MPL 2.0
  *
+ * @property array $terms Associative array of term => URL
+ * @property array $xterms Non-associative array of excluded terms
  * @property int $termLimit Max number of times to link a term in a block of copy
  * @property int $maxLinks Max number of linked terms allowed in a block of copy
  * @property int $distance Distance between the same tags
  * @property string $allowTags Tags that we're allowed to produce links within (blank=any)
  * @property string $linkMarkup Internal link markup
- * @property string $linkMarkupExt External libk markup
- *
+ * @property string $linkMarkupExt External link markup
+ * 
  *
  */
 
@@ -23,7 +25,7 @@ class TextformatterAutoLinks extends Textformatter implements ConfigurableModule
 		return array(
 			'title' => 'Auto Links',
 			'summary' => 'Automatically links any of the configured text phrases to a URL, any time they appear.', 
-			'version' => 7, 
+			'version' => 8, 
 			'url' => "https://processwire.com/modules/textformatter-auto-links/", 
 		); 
 	}
@@ -33,24 +35,6 @@ class TextformatterAutoLinks extends Textformatter implements ConfigurableModule
 	 *
 	 */
 	const defaultTermLimit = 5; 
-
-	/**
-	 * Default max number of links to generate in any block of text
-	 *
-	 */
-	const defaultMaxLinks = 20; 
-
-	/**
-	 * Default distance between words (in characters) before re-linking the same term again.
-	 *
-	 */
-	const defaultDistance = 100; 
-
-	/**
-	 * Default allowed tags to link within (blank=any)
-	 *
-	 */
-	const defaultAllowTags = '';
 
 	/**
 	 * Default markup for internal links
@@ -65,49 +49,31 @@ class TextformatterAutoLinks extends Textformatter implements ConfigurableModule
 	const defaultLinkMarkupExt = '<a target="_blank" href="{href}">{text}</a>'; 
 
 	/**
-	 * Associative array of term => URL
-	 *
-	 */
-	protected $terms = array();
-
-	/**
-	 * Temporary holding string for terms
-	 *
-	 * This is populated by module configuration, and later moved to $terms array
-	 * once we know for certain that it will actually be used. 
-	 *
-	 */
-	protected $termsStr = null;
-
-	/**
-	 * Non-associative array of excluded terms
-	 * 
-	 * @var array
+	 * Construct
 	 * 
 	 */
-	protected $xterms = array();
-
-	/**
-	 * Language ID that terms are for
-	 *
-	 * Used only if multi-language support is active
-	 *
-	 */
-	protected $languageID = 0;
-
-	/**
-	 * Other/future configuration data
-	 *
-	 */
-	protected $data = [
-		'termLimit' => 0, // max number of times to link a term in a block of copy
-		'maxLinks' => 0, // max number of linked terms allowed in a block of copy
-		'distance' => 0,  // distance between the same tags
-		'allowTags' => '', // tags that we're allowed to produce links within (blank=any)
-		'linkMarkup' => '', // internal link markup
-		'linkMarkupExt' => '', // external link markup
-	];
-
+	public function __construct() {
+		parent::__construct();
+		$this->set('terms', []); // Associative array of term => URL
+		$this->set('xterms', []); // Non-associative array of excluded terms
+		$this->set('termLimit', self::defaultTermLimit); // max number of times to link a term in a block of copy
+		$this->set('maxLinks', 20); // max number of linked terms allowed in a block of copy
+		$this->set('distance', 100); // distance between the same tags
+		$this->set('allowTags', ''); // tags that we're allowed to produce links within (blank=any)
+		$this->set('linkMarkup', self::defaultLinkMarkup); // internal link markup
+		$this->set('linkMarkupExt', self::defaultLinkMarkupExt);// external link markup 
+	}
+	
+	public function wired() {
+		parent::wired();
+		$languages = $this->wire()->languages;
+		if($languages) {
+			// terms for other languages
+			foreach($languages as $language) {
+				if(!$language->isDefault()) $this->set("terms$language->id", []); 
+			}
+		}
+	}
 
 	/**
 	 * Initialize the Textformatter
@@ -117,48 +83,9 @@ class TextformatterAutoLinks extends Textformatter implements ConfigurableModule
 		// pick up terms defined in $config variable, optional
 		$terms = $this->wire()->config->get('TextformatterAutolinks');
 		if(is_array($terms)) $this->terms = array_merge($terms, $this->terms); 
-		if(empty($this->data['linkMarkup'])) $this->data['linkMarkup'] = self::defaultLinkMarkup;
-		if(empty($this->data['linkMarkupExt'])) $this->data['linkMarkupExt'] = self::defaultLinkMarkupExt;
-	}
-
-	/**
-	 * Convert $this->termsStr into array in $this->terms
-	 *
-	 */
-	protected function processTermsStr() {
-
-		if(is_null($this->termsStr)) return;
-
-		$value = explode("\n", $this->termsStr); 
-
-		foreach($value as $line) {
-			if(strpos($line, '=') === false) continue; 
-			list($term, $url) = explode('=', $line); 
-			$this->terms[trim($term)] = trim($url); 
-		}
-
-		$this->termsStr = null;
-	}
-
-	/**
-	 * Setup terms for the user's language
-	 *
-	 */
-	protected function setupLanguage() {
-		
-		$language = $this->wire()->user->language; 
-		if(!$language || !$language->id) return; // languages not active
-
-		if($this->languageID && $language->id == $this->languageID) return; // already have the right terms language
-
-		// language terms not yet processed or not consistent with user's language
-		$termsStr = $this->get("terms$language"); // get language-specific terms
-		if($termsStr) { 
-			// if terms are defined for this language, replace the current terms with them
-			$this->terms = array(); // clear out existing terms
-			$this->termsStr = $termsStr; // queue new terms to be processed (by processTermsStr) 
-		}
-		$this->languageID = $language->id; // remember that this language is active
+		if(!$this->linkMarkup) $this->linkMarkup = self::defaultLinkMarkup;
+		if(!$this->linkMarkupExt) $this->linkMarkupExt = self::defaultLinkMarkupExt;
+		parent::init();
 	}
 
 	/**
@@ -172,21 +99,32 @@ class TextformatterAutoLinks extends Textformatter implements ConfigurableModule
 	public function formatValue(Page $page, Field $field, &$value) {
 
 		if(!strlen("$value")) return; 
-		if($this->wire()->languages) $this->setupLanguage();
-		if(!is_null($this->termsStr)) $this->processTermsStr();
-		$termLimit = $this->data['termLimit']; 
+		
+		$termLimit = $this->termLimit;
 		if(!$termLimit) $termLimit = self::defaultTermLimit; 
+		
 		$config = $this->wire()->config;
+		$languages = $this->wire()->languages;
 		$rootURL = $config->urls->root; 
-		/** @var Page $currentPage */
-		$currentPage = $this->wire()->page; // page being viewed (which may be different from $page)
-		$maxLinkedTerms = (int) $this->maxLinks; 
+		
+		/** @var Page $page */
+		$page = $this->wire()->page; // page being viewed (which may be different from $page)
+		$maxLinkedTerms = $this->maxLinks; 
 		$numLinkedTerms = 0; 
+		$terms = [];
+		
+		if($languages) {
+			$language = $this->wire()->user->language;
+			$terms = $this->get("terms$language->id");
+		}
+		
+		if(empty($terms)) $terms = $this->terms;
+		if(!is_array($terms)) $terms = $this->termsArray($terms);
 
-		foreach($this->terms as $term => $url) {
+		foreach($terms as $term => $url) {
 
 			// avoid linking page if we are already on it
-			if($url == $currentPage->path() || $url == $currentPage->id || $url == $_SERVER["REQUEST_URI"]) continue; 
+			if($url == $page->path() || $url == $page->id || $url == $_SERVER["REQUEST_URI"]) continue; 
 
 			// make path-based URLs relative to root
 			if(substr($url, 0, 1) == '/' && $rootURL != '/') $url = $rootURL . substr($url, 1); 
@@ -197,7 +135,6 @@ class TextformatterAutoLinks extends Textformatter implements ConfigurableModule
 			// abort if we've gone over the max allowed links
 			if($maxLinkedTerms > 0 && $numLinkedTerms >= $maxLinkedTerms) break;
 		}
-
 	}
 
 	/**
@@ -250,6 +187,7 @@ class TextformatterAutoLinks extends Textformatter implements ConfigurableModule
 	protected function formatTerm(&$str, $term, $url, $limit) {
 		
 		$pages = $this->wire()->pages;
+		$page = $this->wire()->page;
 
 		$startPos = 0; 
 		$cnt = 0; 
@@ -257,9 +195,25 @@ class TextformatterAutoLinks extends Textformatter implements ConfigurableModule
 		if($expand) $term = rtrim($term, '*'); 
 		$_term = $term;
 		$_termLength = mb_strlen($term); 
-		$distance = (int) $this->data['distance'];
 		$n = 0;
-		$maxN = 255; 
+		$maxN = 255;
+		
+		$distance = $this->distance;
+		$xterms = $this->xterms;
+		$allowTags = $this->allowTags;
+		$linkMarkup = $this->linkMarkup;
+		$linkMarkupExt = $this->linkMarkupExt;
+		
+		if(!is_array($xterms)) $xterms = explode("\n", $xterms);
+		
+		foreach($xterms as $key => $xterm) {
+			$xterm = trim($xterm);
+			if(!strlen($xterm)) {
+				unset($xterms[$key]); 
+			} else {
+				$xterms[$key] = $xterm;
+			}
+		}
 
 		do { 
 			if($startPos && mb_strlen($str) <= $startPos) break;
@@ -272,7 +226,7 @@ class TextformatterAutoLinks extends Textformatter implements ConfigurableModule
 			$termEnd = $termPos + $termLength;
 			$isExcludeTerm = false;
 			
-			foreach($this->xterms as $xterm) {
+			foreach($xterms as $xterm) {
 				if(mb_stripos($xterm, $term) === false) continue;
 				$x1 = mb_stripos($str, $xterm, $startPos);
 				if($x1 === false) continue;
@@ -286,7 +240,7 @@ class TextformatterAutoLinks extends Textformatter implements ConfigurableModule
 			if($isExcludeTerm) continue;
 			
 			// determine if we are within an allowed tag
-			if($this->allowTags && !$this->inAllowedTag($str, $termPos)) continue; 
+			if($allowTags && !$this->inAllowedTag($str, $termPos)) continue; 
 
 			// determine if the block of text is already linked
 			$closeLinkPos = mb_stripos($str, '</a>', $termPos); 
@@ -311,9 +265,9 @@ class TextformatterAutoLinks extends Textformatter implements ConfigurableModule
 
 			if(ctype_digit("$url")) {
 				// URL specified as a page ID number
-				$page = $pages->get((int) $url); 			
-				if(!$page->id || $page->id == $this->wire()->page->id || !$page->viewable()) continue; 
-				$url = $page->url;
+				$p = $pages->get((int) $url); 			
+				if(!$p->id || $p->id == $page->id || !$p->viewable()) continue; 
+				$url = $p->url;
 			}
 
 			$str1 = mb_substr($str, 0, $termPos); // part before the term
@@ -347,7 +301,7 @@ class TextformatterAutoLinks extends Textformatter implements ConfigurableModule
 			// if term is not ok, we'll skip it since it's a component of some other term
 			if($ok > 0) {
 				// insert the link
-				$link = strpos($url, '://') !== false ? $this->linkMarkupExt : $this->linkMarkup; 
+				$link = strpos($url, '://') !== false ? $linkMarkupExt : $linkMarkup; 
 				$link = str_replace(array('{href}', '{text}'), array($url, $term), $link); 
 				$str = $str1 . $link . $str2; 
 				$startPos += (mb_strlen($link) - $termLength) + $distance;
@@ -370,73 +324,54 @@ class TextformatterAutoLinks extends Textformatter implements ConfigurableModule
 	 */
 	public function set($key, $value) {
 
-		if($key == 'terms') {
-			if(is_string($value)) {
-				$this->termsStr = $value;
-			} else if(is_array($value)) {
-				$this->terms = $value;
+		if(strpos($key, 'terms') === 0 && !is_array($value)) {
+			// $terms or $terms1234 where 1234 is language ID
+			$value = $this->termsArray($value);
+		} else if($key === 'xterms' && !is_array($value)) {
+			$a = [];
+			foreach(explode("\n", $value) as $line) {
+				$line = trim($line);
+				if(strlen($line)) $a[] = $line;
 			}
-		} else if($key == 'xterms') {
-			if(is_string($value)) {
-				$value = strlen(trim($value)) ? explode("\n", $value) : array();
-				foreach($value as $k => $v) {
-					$v = trim($v);	
-					if(!strlen($v)) {
-						unset($value[$k]); 
-					} else {
-						$value[$k] = trim($v);
-					}
-				}
-			}
-			if(is_array($value)) $this->xterms = $value; 
-		} else {
-			$this->data[$key] = $value;
+			$value = $a;
+		} else if(in_array($key, [ 'maxLinks', 'termLimit', 'distance' ])) {
+			$value = (int) $value;
 		}
-
-		return $this; 
+		return parent::set($key, $value);
 	}
 
 	/**
-	 * Get configuration value for ConfigurableModule interface
+	 * Convert given string of terms to an array
 	 * 
-	 * @param string $key
-	 * @return mixed
-	 *
+	 * @param $terms
+	 * @return array
+	 * 
 	 */
-	public function get($key) {
-
-		if($key == 'terms') {
-			if(strlen($this->termsStr)) {
-				$value = $this->termsStr;
-			} else {
-				// convert array back to text, for config and storage
-				$value = '';
-				foreach($this->terms as $term => $url) {
-					$value .= "$term=$url\n";
-				}
-				$value = trim($value);
-			}
-		} else if($key == 'xterms') {
-			return $this->xterms;
-
-		} else if(isset($this->data[$key])) {
-			// some other/future config value
-			$value = $this->data[$key]; 
-
-		} else {
-			// api variable
-			$value = $this->wire($key);
+	protected function termsArray($terms) {
+		if(is_array($terms)) return $terms;
+		$a = [];
+		foreach(explode("\n", (string) $terms) as $line) {
+			if(strpos($line, '=') === false) continue;
+			list($term, $url) = explode('=', $line);
+			$a[trim($term)] = trim($url);
 		}
-
-		return $value; 
+		return $a;
 	}
 
-	public function __set($key, $value) {
-		return $this->set($key, $value); 
-	}
-
-	public function __get($key) { 
-		return $this->get($key); 
+	/**
+	 * Get the terms property as a newline separated key=value string
+	 * 
+	 * @param $terms
+	 * @return string
+	 * 
+	 */
+	protected function termsString($terms) {
+		if(!is_array($terms)) return (string) $terms;
+		$a = [];
+		foreach($terms as $term => $url) {
+			$a[] = trim($term) . '=' . trim($url);
+		}
+		return implode("\n", $a);
 	}
 
 	/**
@@ -452,7 +387,6 @@ class TextformatterAutoLinks extends Textformatter implements ConfigurableModule
 		/** @var InputfieldTextarea $f */
 		$f = $modules->get('InputfieldTextarea'); 		
 		$f->attr('name', 'terms');
-		$f->attr('value', isset($data['terms']) ? $data['terms'] : ''); 
 		$f->label = $this->_('Terms to Link'); 
 		$f->description = 
 			$this->_('Enter one per line of: "term=URL", where "term" is the text/phrase you want to automatically link, and "URL" is the URL/path you want it to link to.') . ' ' . 
@@ -465,6 +399,7 @@ class TextformatterAutoLinks extends Textformatter implements ConfigurableModule
 			$this->_('Term text is not case sensitive.') . ' ' . 
 			$this->_('If preferred, terms may also be specified manually via $config->TextformatterAutolinks = [ "term" => "URL" ]; in your /site/config.php file.');
 		$f->rows = 15; 
+		$f->val($this->termsString($this->terms));
 		$inputfields->add($f); 
 
 		if($languages) {
@@ -479,8 +414,8 @@ class TextformatterAutoLinks extends Textformatter implements ConfigurableModule
 				}
 				/** @var InputfieldTextarea $f */
 				$f = $modules->get('InputfieldTextarea'); 		
-				$f->attr('name', 'terms' . $language->id);
-				$f->attr('value', isset($data["terms$language->id"]) ? $data["terms$language->id"] : ''); 
+				$f->attr('name', "terms$language->id");
+				$f->attr('value', $this->termsString($this->get("terms$language->id"))); 
 				$f->label = $label;
 				$f->rows = 15; 
 				$f->collapsed = Inputfield::collapsedBlank;
@@ -491,22 +426,19 @@ class TextformatterAutoLinks extends Textformatter implements ConfigurableModule
 		/** @var InputfieldTextarea $f */
 		$f = $modules->get('InputfieldTextarea'); 
 		$f->attr('name', 'xterms'); 
-		$value = isset($data['xterms']) ? $data['xterms'] : '';
+		$value = $this->xterms;
 		if(is_array($value)) $value = implode("\n", $value); 
-		$f->attr('value', $value); 
+		$f->val($value);
 		$f->label = $this->_('Phrases to exclude'); 
 		$f->description = $this->_('Sometimes a term appears in a phrase where you do not want it linked. Enter any phrases (containing terms above) where the link should be prevented.'); 
 		$f->notes = $this->_('For example, if you wanted the term “contact” linked, but not when it appears in “contact sports”, you would enter “contact sports” here.');
 		$f->collapsed = Inputfield::collapsedBlank;
 		$inputfields->add($f); 
 		
-		$termLimit = isset($data['termLimit']) ? (int) $data['termLimit'] : self::defaultTermLimit; 
-		$maxLinks = isset($data['maxLinks']) ? (int) $data['maxLinks'] : self::defaultMaxLinks; 
-
 		/** @var InputfieldInteger $f */
 		$f = $modules->get('InputfieldInteger'); 
 		$f->attr('name', 'termLimit'); 
-		$f->attr('value', $termLimit); 
+		$f->val($this->termLimit);
 		$f->label = $this->_('Maximum links per term'); 
 		$f->required = true; 
 		$f->description = $this->_('Use this option to prevent the same term from being linked too many times in the same block of text.'); 
@@ -517,7 +449,7 @@ class TextformatterAutoLinks extends Textformatter implements ConfigurableModule
 		/** @var InputfieldInteger $f */
 		$f = $modules->get('InputfieldInteger'); 
 		$f->attr('name', 'maxLinks'); 
-		$f->attr('value', $maxLinks);
+		$f->val($this->maxLinks); 
 		$f->label = $this->_('Maximum terms to link'); 
 		$f->description = $this->_('Use this option to prevent too many terms from being linked in the same text.'); 
 		$f->notes = $this->_('Leave blank (or 0) for no maximum (recommended).'); 
@@ -527,7 +459,7 @@ class TextformatterAutoLinks extends Textformatter implements ConfigurableModule
 		/** @var InputfieldInteger $f */
 		$f = $modules->get('InputfieldInteger');
 		$f->attr('name', 'distance'); 
-		$f->attr('value', isset($data['distance']) ? (int) $data['distance'] : self::defaultDistance); 
+		$f->val($this->distance);
 		$f->label = $this->_('Minimum link distance'); 
 		$f->description = $this->_('Use this option to prevent the same term from being linked more than once when it appears in close range.'); 
 		$f->notes = $this->_('Specify value in number of characters.'); 
@@ -537,7 +469,7 @@ class TextformatterAutoLinks extends Textformatter implements ConfigurableModule
 		/** @var InputfieldText $f */
 		$f = $modules->get('InputfieldText');
 		$f->attr('name', 'allowTags'); 
-		$f->attr('value', isset($data['allowTags']) ? $data['allowTags'] : self::defaultAllowTags); 
+		$f->val($this->allowTags);
 		$f->label = $this->_('Allowed tags whitelist'); 
 		$f->description = $this->_('Enter a list of HTML tags (without brackets) that AutoLinks is allowed to generate links within, each separated by a space. When specified, links will only be generated if the terms appear somewhere within one of the given HTML tags. If left blank, terms will be linked within any HTML tags.'); // Allowed tags description
 		$f->notes = $this->_('Example: p li h3'); 
@@ -552,7 +484,7 @@ class TextformatterAutoLinks extends Textformatter implements ConfigurableModule
 		/** @var InputfieldText $f */
 		$f = $modules->get('InputfieldText');
 		$f->attr('name', 'linkMarkup'); 
-		$f->attr('value', !empty($data['linkMarkup']) ? $data['linkMarkup'] : self::defaultLinkMarkup); 
+		$f->val($this->linkMarkup);
 		$f->label = $this->_('Link Markup (Internal Links)'); 
 		$f->columnWidth = 50; 
 		$f->description = $this->_('Links that do NOT begin with a scheme/protocol.'); 
@@ -561,7 +493,7 @@ class TextformatterAutoLinks extends Textformatter implements ConfigurableModule
 		/** @var InputfieldText $f */
 		$f = $modules->get('InputfieldText');
 		$f->attr('name', 'linkMarkupExt'); 
-		$f->attr('value', !empty($data['linkMarkupExt']) ? $data['linkMarkupExt'] : self::defaultLinkMarkupExt); 
+		$f->val($this->linkMarkupExt);
 		$f->label = $this->_('Link Markup (External Links)'); 
 		$f->description = $this->_('Links that DO begin with a scheme/protocol like https://.'); 
 		$f->columnWidth = 50; 
